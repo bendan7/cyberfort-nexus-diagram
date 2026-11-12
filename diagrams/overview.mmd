@@ -1,0 +1,113 @@
+%% All three engines consume one raw-packet topic in separate consumer groups.
+%% Detection alerts remain on their existing file and C&C topics.
+%% The earlier starter is preserved in starter-reference.mmd.
+%% The course brief specifies an on-premises organization network.
+%% The third-party antivirus runs on premises and accepts a file path via REST.
+%% Extracted files are stored at paths accessible to the antivirus service.
+flowchart TB
+    accTitle: CyberFort Nexus preliminary architecture
+    accDescr: Normal traffic flows between the Internet, Enterprise Gateway, and internal endpoints. The Traffic Capture Probe publishes mirrored raw packets to one Message Broker topic. File Analysis, Command and Control Detection, and Network Forensics each consume the full stream in separate consumer groups and prepare their own inputs.
+
+    internet@{ shape: cloud, label: "The Internet" }
+
+    subgraph organization["Organization Network"]
+      direction TB
+      gateway["Enterprise Gateway"]
+      endpoints["Internal endpoints<br/>and servers"]
+      probe["Traffic Capture Probe<br/>(Sensor)"]
+      gateway <-->|Normal traffic| endpoints
+      gateway -.->|Mirrored copy of both directions| probe
+
+      subgraph engines["Detection & Forensics"]
+        rawPackets@{ shape: h-cyl, label: "Message Broker<br/>Inbound & Outbound Traffic" }
+        subgraph fileService["File Analysis Service"]
+          files["File Extraction<br/>& Scan Orchestration"]
+          antivirus["Third-party Antivirus<br/>On-premises"]
+          scanFiles[("Local File Storage<br/>Shared scan directory")]
+          files -->|Save extracted file| scanFiles
+          files <-->|REST: file path / JSON report| antivirus
+          antivirus -->|Read file| scanFiles
+        end
+        cnc["Command & Control<br/>Machine Learning"]
+        subgraph forensics["Network Forensics Service"]
+          flowProcessor["Flow Extraction<br/>& Indexing"]
+          flowDatabase[("Time-series Database<br/>Flow metadata<br/>3-month retention")]
+          flowProcessor -->|Write and index flow records| flowDatabase
+        end
+      end
+
+      probe -->|Publish raw packets| rawPackets
+
+      %% Each group reads the same raw packets and advances independently.
+      %% Services perform their own filtering, reassembly and metadata extraction.
+      %% Partition by bidirectional connection identity to preserve flow affinity.
+      rawPackets -->|File Analysis consumer group| files
+      rawPackets -->|C&C consumer group| cnc
+      rawPackets -->|Forensics consumer group| flowProcessor
+      %% The database belongs logically to the service. This does not imply
+      %% the processor and database run in the same container or on one server.
+
+      %% These are logical broker views, not a requirement for separate clusters.
+      subgraph kafka["Message Broker: Alert Topics"]
+        alerts@{ shape: h-cyl, label: "Suspicious File Alerts Topic" }
+        cncAlerts@{ shape: h-cyl, label: "Suspicious C&C Alerts Topic" }
+      end
+      subgraph portalService["Investigation Portal"]
+        portal["Portal UI & Backend<br/>Store and update alerts by ID"]
+        userDatabase[("SQL Database<br/>Users<br/>Investigations<br/>Alerts")]
+        portal <-->|Read / write| userDatabase
+      end
+      %% The SQL database belongs logically to the portal; it can run separately.
+      aci["ACI<br/>Automatic Cyber Investigator"]
+      files -->|Publish alert with unique ID| alerts
+      %% Separate consumer groups each receive the same detection alerts.
+      %% The portal backend consumes broker messages; the browser does not connect directly.
+      alerts -->|Portal consumer group| portal
+      alerts -->|ACI consumer group| aci
+      cnc -->|Publish alert with unique ID| cncAlerts
+      cncAlerts -->|ACI consumer group| aci
+      cncAlerts -->|Portal consumer group| portal
+      forensics <-->|Forensic queries and evidence| aci
+      aci -->|Alerts & investigation updates via API| portal
+      %% Alert storage must handle retries without duplicating detections.
+      %% ACI calls the portal backend directly. Updates reference the original
+      %% alert ID; new incident alerts link to related detections when applicable.
+      %% The portal queries the service, rather than accessing its database directly.
+      forensics <-->|Forensic queries and results| portal
+
+      monitoring["Monitoring & Logging"]
+      %% Dashed telemetry connections cover each service boundary, including
+      %% its internal workers, antivirus, databases and local storage.
+      probe -.-> monitoring
+      rawPackets -.-> monitoring
+      fileService -.-> monitoring
+      cnc -.-> monitoring
+      forensics -.-> monitoring
+      kafka -.-> monitoring
+      aci -.-> monitoring
+      portalService -.-> monitoring
+    end
+
+    internet <-->|Inbound and outbound traffic| gateway
+    style internet fill:#ffffff,stroke:#527c6e,color:#244f43,stroke-width:1.5px
+    style gateway fill:#ffffff,stroke:#527c6e,color:#244f43,stroke-width:1.5px
+    style endpoints fill:#ffffff,stroke:#527c6e,color:#244f43,stroke-width:1.5px
+    style probe fill:#e7f4f0,stroke:#2b7666,color:#194a41,stroke-width:1.5px
+    style portal fill:#eaf0fc,stroke:#5377b9,color:#243e68,stroke-width:1.5px
+    style portalService fill:#f3f6fc,stroke:#5377b9,stroke-width:1.5px
+    style userDatabase fill:#fff4df,stroke:#b48a38,color:#6c501d,stroke-width:1.5px
+    style aci fill:#eaf0fc,stroke:#5377b9,color:#243e68,stroke-width:1.5px
+    style kafka fill:#fff8e9,stroke:#b48a38,stroke-width:1.5px
+    style rawPackets fill:#fff4df,stroke:#b48a38,color:#6c501d,stroke-width:1.5px
+    style alerts fill:#fff4df,stroke:#b48a38,color:#6c501d,stroke-width:1.5px
+    style cncAlerts fill:#fff4df,stroke:#b48a38,color:#6c501d,stroke-width:1.5px
+    style fileService fill:#f1f8f5,stroke:#527c6e,stroke-width:1.5px
+    style antivirus fill:#e7f4f0,stroke:#2b7666,color:#194a41,stroke-width:1.5px
+    style scanFiles fill:#fff4df,stroke:#b48a38,color:#6c501d,stroke-width:1.5px
+    classDef engine fill:#e7f4f0,stroke:#2b7666,color:#194a41,stroke-width:1.5px;
+    class files,cnc,flowProcessor engine;
+    style forensics fill:#f1f8f5,stroke:#527c6e,stroke-width:1.5px
+    style flowDatabase fill:#fff4df,stroke:#b48a38,color:#6c501d,stroke-width:1.5px
+    style engines fill:#f8fcfa,stroke:#a7c8ba,stroke-width:1px
+    style organization fill:#f1f8f5,stroke:#527c6e,stroke-width:2px,color:#244f43
+    style monitoring fill:#f6f3fb,stroke:#8a75ab,color:#4c3969,stroke-width:1.5px
